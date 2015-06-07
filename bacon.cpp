@@ -23,13 +23,19 @@ using namespace std;
 //
 struct Edge
 {
-  unordered_set<string>::iterator     movie;
-  unordered_map<string,int>::iterator actor;
+  int m_movieIndex;
+  int m_actorIndex;
 };
 
 // This is our adjacency list
 //
 typedef deque<Edge> edgeList;
+
+struct Vertex
+{
+  unordered_map<string,int>::iterator m_actor;
+  edgeList                            m_adjacencyList;
+};
 
 // The main control block for this application.
 // All the important structures are anchored here.
@@ -40,14 +46,20 @@ struct BaconCB
   // or actor's name.  We only want to store the strings once
   // and access them via iterators to save on memory.
   //
-  unordered_set<string>      m_moviesMap;
+  unordered_map<string, int> m_moviesMap;
   unordered_map<string, int> m_actorsMap;
 
   // This is an array of all our nodes in
   // the graph
   //
-  deque< edgeList >          m_graphVertex;
+  deque< Vertex >          m_graphVertex;
   int                        m_numActors;
+
+  // Each movie has a unique ID.  Map to a pointer into
+  // the hash table.
+  //
+  deque<unordered_map<string,int>::iterator > m_movieIndexes;
+  int                                         m_numMovies;
 
   // Command line parameters
   //
@@ -79,7 +91,7 @@ static void parseFile( BaconCB *bCB)
     {
       unsigned int numRead = 0;
       std::istringstream line(token);
-      unordered_set<string>::iterator movieIT;
+      int movieIndex = -1;
       deque<unordered_map<string,int>::iterator> movieCast;
 
       // Break up each line by a delimiter, which is '/' by default.
@@ -90,13 +102,24 @@ static void parseFile( BaconCB *bCB)
       {
         if ( !numRead )
         {
-          pair<unordered_set<string>::iterator, bool> insertResult;
+          pair<unordered_map<string,int>::iterator, bool> insertResult;
 
-          insertResult = bCB->m_moviesMap.insert(token);
+          insertResult = bCB->m_moviesMap.insert(make_pair(token, bCB->m_numMovies));
 
-          // Remember the movie info
+          // Remember the movie we are tracking.
           //
-          movieIT = insertResult.first;
+          movieIndex = insertResult.first->second;
+
+          // Haven't seen this movie before...
+          //
+          if ( movieIndex == bCB->m_numMovies )
+          {
+            // Track this new movie and add a pointer to our
+            // hash table.
+            //
+            bCB->m_movieIndexes.push_back(insertResult.first);
+            bCB->m_numMovies++;
+          }
         }
         else
         {
@@ -118,10 +141,13 @@ static void parseFile( BaconCB *bCB)
             //
             bCB->m_numActors++;
 
-            // Add a new vertex to our graph.
+            // Add a new vertex to our graph.  The adjacency list is initially
+            // empty.
             //
-            edgeList newList;
-            bCB->m_graphVertex.push_back(newList);
+            Vertex   newVertex;
+            newVertex.m_actor = insertResult.first;
+
+            bCB->m_graphVertex.push_back(newVertex);
           }
 
           // For each cast member in this movie, add it to an array.  We will
@@ -136,7 +162,7 @@ static void parseFile( BaconCB *bCB)
       // Go through all the actors and create edges between them.  O(n^2)
       //
       struct Edge newEdge;
-      newEdge.movie = movieIT;
+      newEdge.m_movieIndex = movieIndex;
 
       for ( int i = 0; i < movieCast.size() - 1; i++ )
       {
@@ -155,13 +181,17 @@ static void parseFile( BaconCB *bCB)
           //    11s           48s
           // 4.31GB  vs.   4.53GB
           //
-          newEdge.actor = movieCast[j];
-          bCB->m_graphVertex[srcID].push_back(newEdge);
+          // Changed to make Edge use ints instead of iterators
+          //     11s
+          //  3.95GB
+          //
+          newEdge.m_actorIndex = dstID;
+          bCB->m_graphVertex[srcID].m_adjacencyList.push_back(newEdge);
 
           // Create a link back to i from j
           //
-          newEdge.actor = movieCast[i];
-          bCB->m_graphVertex[dstID].push_back(newEdge);
+          newEdge.m_actorIndex = srcID;
+          bCB->m_graphVertex[dstID].m_adjacencyList.push_back(newEdge);
         }
       }
     }
@@ -176,7 +206,7 @@ static void parseFile( BaconCB *bCB)
     int t1 = time(NULL);
     t1 -= t0;
     cout << "Done.  "<< t1 <<" seconds elapsed.  " 
-         << bCB->m_graphVertex.size() << " vertices." << endl;
+         << bCB->m_numActors << " vertices." << endl;
   }
   cout << endl;
 }
@@ -184,11 +214,11 @@ static void parseFile( BaconCB *bCB)
 #ifdef DEBUG
 static void dumpMovies(BaconCB *bCB)
 {
-  unordered_set<string>::iterator it = bCB->m_moviesMap.begin();
+  unordered_map<string,int>::iterator it = bCB->m_moviesMap.begin();
 
   while ( it != bCB->m_moviesMap.end() )
   {
-    cout << *it << endl;
+    cout << it->first << endl;
     it++;
   }
   cout << "Number of vertices: " << bCB->m_actorsMap.size() << endl;
@@ -198,10 +228,15 @@ static void printAdjList( BaconCB *bCB,
                           const unordered_map<string,int>::iterator &it)
 {
   const int id = it->second;
-  edgeList::iterator edgeIT = bCB->m_graphVertex[id].begin();
-  while ( edgeIT != bCB->m_graphVertex[id].end() )
+  edgeList::iterator edgeIT = bCB->m_graphVertex[id].m_adjacencyList.begin();
+  while ( edgeIT != bCB->m_graphVertex[id].m_adjacencyList.end() )
   {
-    cout << it->first << " was in \"" << *edgeIT->movie << "\" with " << edgeIT->actor->first << endl;
+    const int movieIndex = edgeIT->m_movieIndex;
+    const int actorIndex = edgeIT->m_actorIndex;
+    cout << bCB->m_graphVertex[id].m_actor->first << " was in " 
+         << bCB->m_movieIndexes[movieIndex]->first
+         << " with "
+         << bCB->m_graphVertex[actorIndex].m_actor->first << endl;
 
     edgeIT++;
   }
@@ -210,7 +245,7 @@ static void printAdjList( BaconCB *bCB,
 static void printStats(BaconCB *bCB ,
                        const unordered_map<string,int>::iterator &it )
 {
-  cout << it->first << " (# " << it->second << ") has " << bCB->m_graphVertex[it->second].size() << " edges." << endl;
+  cout << it->first << " (# " << it->second << ") has " << bCB->m_graphVertex[it->second].m_adjacencyList.size() << " edges." << endl;
 }
 
 static void printStats(BaconCB *bCB ,
@@ -249,7 +284,7 @@ static void baconator( BaconCB *bCB ,
     {
       // If the adjacency list is empty, then this actor was the sole person in a movie.
       //
-      if ( bCB->m_graphVertex[it->second].empty() )
+      if ( bCB->m_graphVertex[it->second].m_adjacencyList.empty() )
       {
         cout << it->first << " is not connected to anybody.  The actor must have been in a movie by themselves." << endl;
       }
@@ -261,8 +296,8 @@ static void baconator( BaconCB *bCB ,
         deque<bool> visited(numVertices, false);
 
         Edge dummy;
-        dummy.movie = bCB->m_moviesMap.end();
-        dummy.actor = bCB->m_actorsMap.end();
+        dummy.m_movieIndex = -1;
+        dummy.m_actorIndex = -1;
 
         // This stores the edge that was last used to link to
         // another actor.  We can print out the path from our search 
@@ -287,7 +322,7 @@ static void baconator( BaconCB *bCB ,
           // Keep track of which actor to store in the
           // path we took to each edge.
           //
-          dummy.actor = curIT;
+          dummy.m_actorIndex = curIT->second;
 
           // If we just pulled Kevin Bacon off the work queue, then
           // our search is completed.
@@ -302,17 +337,17 @@ static void baconator( BaconCB *bCB ,
           // the work queue.  This is the breadth first search portion of
           // the code.
           //
-          edgeList::iterator edgeIT = bCB->m_graphVertex[currActor].begin();
-          while ( edgeIT != bCB->m_graphVertex[currActor].end() )
+          edgeList::iterator edgeIT = bCB->m_graphVertex[currActor].m_adjacencyList.begin();
+          while ( edgeIT != bCB->m_graphVertex[currActor].m_adjacencyList.end() )
           {
-            const int edgeID = edgeIT->actor->second;
+            const int edgeID = edgeIT->m_actorIndex;
 
             // Only enqueue unvisited vertices.
             //
             if ( !visited[edgeID] )
             {
               visited[edgeID] = true;
-              unordered_map<string,int>::iterator nextIT = bCB->m_actorsMap.find(edgeIT->actor->first);
+              unordered_map<string,int>::iterator nextIT = bCB->m_graphVertex[edgeID].m_actor;
               work.push_back(nextIT);
 
               // Keep track of how we got to each actor by tracking the
@@ -321,7 +356,7 @@ static void baconator( BaconCB *bCB ,
               // Bacon and that will tell us the shortest path from the
               // starting actor to Kevin Bacon.
               //
-              dummy.movie = edgeIT->movie;
+              dummy.m_movieIndex = edgeIT->m_movieIndex;
 
               prev[edgeID] = dummy;
             }
@@ -344,7 +379,7 @@ static void baconator( BaconCB *bCB ,
                   currID != it->second )
           {
             shortestPath.push_front( prev[currID] );
-            currID = prev[currID].actor->second;
+            currID = prev[currID].m_actorIndex;
             i++;
           }
 
@@ -357,10 +392,17 @@ static void baconator( BaconCB *bCB ,
                 j < shortestPath.size() && i < maxDepth;
                 j++ )
           {
-            cout << j << ") "<< shortestPath[j].actor->first << " was in " << *shortestPath[j].movie << " with " ;
+            const int movieIndex = shortestPath[j].m_movieIndex;
+            const int actorIndex = shortestPath[j].m_actorIndex;
+
+            cout << j << ") "<< bCB->m_graphVertex[actorIndex].m_actor->first << " was in " 
+                  << bCB->m_movieIndexes[movieIndex]->first
+                  << " with " ;
+
             if ( j < shortestPath.size() -1)
             {
-              cout << shortestPath[j+1].actor->first;
+              const int actorBIndex = shortestPath[j+1].m_actorIndex;
+              cout << bCB->m_graphVertex[actorBIndex].m_actor->first;
               cout << endl;
             }
           }
@@ -393,29 +435,15 @@ static void baconator( BaconCB *bCB ,
 static void automatedTest( BaconCB *bCB,
                            int      numToTest )
 {
-  // We don't have random access into the hash tables.
-  // Instead, just randomly pick a vertex and then a random
-  // actor from the adjacency list.
-  //
   srand(time(NULL));
+
+  // Randomly pick a vertex and then run baconator() on it.
+  //
   for ( int i = 0; i < numToTest; i++ )
   {
-    int randomVertex = 0;
-    int numEdges = 0;
+    int randomVertex = rand() % bCB->m_numActors;
+    unordered_map<string,int>::iterator tmpActor = bCB->m_graphVertex[randomVertex].m_actor;
 
-    // Loop until we find an actor with something in his/her
-    // adjacency list.
-    //
-    do
-    {
-      randomVertex = rand() % bCB->m_graphVertex.size();
-      numEdges = bCB->m_graphVertex[randomVertex].size();
-    }
-    while ( numEdges == 0 );
-
-    int randomEdge = rand() % numEdges;
-
-    unordered_map<string,int>::iterator tmpActor = bCB->m_graphVertex[randomVertex][randomEdge].actor;
     baconator(bCB, tmpActor->first.c_str() );
   }
 }
@@ -451,7 +479,7 @@ static void parseArgs(BaconCB *bCB, int argc, char *argv[])
 int main( int argc, char *argv[] )
 {
   BaconCB bCB;
-  bCB.m_numActors = 0;
+  bCB.m_numActors = bCB.m_numMovies = 0;
   bCB.inputFile = NULL;
   bCB.command =  argv[0];
 
